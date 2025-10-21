@@ -4,12 +4,10 @@ Mini Consola para Procesamiento de Block Models
 
 Esta aplicación permite:
 1. Leer múltiples archivos CSV (block models cortados)
-2. Asignar etiquetas de fase a cada archivo
+2. Asignar etiquetas de sólido a cada archivo
 3. Aplicar reglas de capping configurables
 4. Calcular variables derivadas
 5. Exportar resultado consolidado
-
-
 """
 
 import tkinter as tk
@@ -31,12 +29,12 @@ class MiniConsolaApp:
         self.csv_files = []
         self.folder_path = tk.StringVar()
         self.column_mappings = {}
-        self.fase_labels = {}
+        self.solido_labels = {}
         self.rules_manager = RulesManager()
         self.processor = BlockModelProcessor()
         
         # Variables para datos detectados automáticamente
-        self.available_fases = []
+        self.available_solidos = []
         self.available_pas_cut_values = []
         
         self.setup_ui()
@@ -56,7 +54,10 @@ class MiniConsolaApp:
         # Pestaña 3: Reglas de capping
         self.setup_rules_tab(notebook)
         
-        # Pestaña 4: Procesamiento y resultados
+        # Pestaña 4: Preview antes/después
+        self.setup_preview_tab(notebook)
+        
+        # Pestaña 5: Procesamiento y resultados
         self.setup_processing_tab(notebook)
     
     def setup_files_tab(self, notebook):
@@ -76,13 +77,13 @@ class MiniConsolaApp:
         files_frame = ttk.LabelFrame(frame, text="Archivos CSV Encontrados", padding=10)
         files_frame.pack(fill='both', expand=True, padx=10, pady=5)
         
-        # Treeview para mostrar archivos y asignar etiquetas de fase
-        columns = ('archivo', 'etiqueta_fase')
+        # Treeview para mostrar archivos y asignar etiquetas de sólido
+        columns = ('archivo', 'etiqueta_solido')
         self.files_tree = ttk.Treeview(files_frame, columns=columns, show='headings', height=10)
         self.files_tree.heading('archivo', text='Archivo CSV')
-        self.files_tree.heading('etiqueta_fase', text='Etiqueta de Fase')
+        self.files_tree.heading('etiqueta_solido', text='Sólido')
         self.files_tree.column('archivo', width=400)
-        self.files_tree.column('etiqueta_fase', width=200)
+        self.files_tree.column('etiqueta_solido', width=200)
         
         scrollbar_files = ttk.Scrollbar(files_frame, orient='vertical', command=self.files_tree.yview)
         self.files_tree.configure(yscrollcommand=scrollbar_files.set)
@@ -93,7 +94,7 @@ class MiniConsolaApp:
         # Botón para editar etiqueta
         edit_frame = ttk.Frame(files_frame)
         edit_frame.pack(fill='x', pady=5)
-        ttk.Button(edit_frame, text="Editar Etiqueta de Fase", command=self.edit_fase_label).pack()
+        ttk.Button(edit_frame, text="Editar Sólido", command=self.edit_solido_label).pack()
     
     def setup_columns_tab(self, notebook):
         """Configurar pestaña de mapeo de columnas"""
@@ -161,17 +162,17 @@ class MiniConsolaApp:
         rules_frame = ttk.LabelFrame(frame, text="Reglas de Capping Configuradas", padding=10)
         rules_frame.pack(fill='both', expand=True, padx=10, pady=5)
         
-        columns = ('fase', 'pas_cut', 'rango_min', 'rango_max', 'multiplicador')
+        columns = ('solido', 'pas_cut', 'rango_min', 'rango_max', 'multiplicador')
         self.rules_tree = ttk.Treeview(rules_frame, columns=columns, show='headings', height=12)
         
-        self.rules_tree.heading('fase', text='Fase')
+        self.rules_tree.heading('solido', text='Sólido')
         self.rules_tree.heading('pas_cut', text='Pas Cut')
         self.rules_tree.heading('rango_min', text='Rango Mín')
         self.rules_tree.heading('rango_max', text='Rango Máx')
         self.rules_tree.heading('multiplicador', text='Multiplicador')
         
         # Ajustar anchos de columnas
-        self.rules_tree.column('fase', width=80)
+        self.rules_tree.column('solido', width=80)
         self.rules_tree.column('pas_cut', width=80)
         self.rules_tree.column('rango_min', width=100)
         self.rules_tree.column('rango_max', width=100)
@@ -186,10 +187,49 @@ class MiniConsolaApp:
         # Inicializar con reglas por defecto
         self.refresh_rules_tree()
     
+    def setup_preview_tab(self, notebook):
+        """Configurar pestaña de preview antes/después"""
+        frame = ttk.Frame(notebook)
+        notebook.add(frame, text="4. Preview")
+        
+        # Información superior
+        info_frame = ttk.LabelFrame(frame, text="Vista Previa de Cambios", padding=10)
+        info_frame.pack(fill='x', padx=10, pady=5)
+        
+        info_text = "Aquí puedes ver el antes y después de aplicar las reglas de capping por cada combinación Sólido/PAS_CUT"
+        ttk.Label(info_frame, text=info_text, font=('Arial', 9)).pack()
+        
+        # Botón para generar preview
+        button_frame = ttk.Frame(info_frame)
+        button_frame.pack(fill='x', pady=10)
+        
+        ttk.Button(button_frame, text="🔍 Generar Preview", 
+                  command=self.generate_preview, 
+                  style='Accent.TButton').pack(side='left', padx=5)
+        
+        ttk.Button(button_frame, text="🔄 Actualizar", 
+                  command=self.refresh_preview).pack(side='left', padx=5)
+        
+        # Área de resultados con scroll
+        results_frame = ttk.LabelFrame(frame, text="Comparación Antes/Después", padding=10)
+        results_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        
+        # Text widget con scrollbar para mostrar resultados
+        self.preview_text = tk.Text(results_frame, height=20, width=80, font=('Consolas', 9))
+        scrollbar_preview = ttk.Scrollbar(results_frame, orient='vertical', command=self.preview_text.yview)
+        self.preview_text.configure(yscrollcommand=scrollbar_preview.set)
+        
+        self.preview_text.pack(side='left', fill='both', expand=True)
+        scrollbar_preview.pack(side='right', fill='y')
+        
+        # Agregar texto inicial
+        self.preview_text.insert('1.0', "📋 Configura archivos, columnas y reglas, luego haz clic en 'Generar Preview'\n\n")
+        self.preview_text.config(state='disabled')
+    
     def setup_processing_tab(self, notebook):
         """Configurar pestaña de procesamiento"""
         frame = ttk.Frame(notebook)
-        notebook.add(frame, text="4. Procesamiento")
+        notebook.add(frame, text="5. Procesamiento")
         
         # Opciones de guardado
         save_options_frame = ttk.LabelFrame(frame, text="Opciones de Guardado", padding=15)
@@ -266,7 +306,7 @@ class MiniConsolaApp:
             
             # Agregar a la vista con etiqueta por defecto
             default_label = filename.replace('.csv', '')
-            self.fase_labels[str(file_path)] = default_label
+            self.solido_labels[str(file_path)] = default_label
             
             self.files_tree.insert('', 'end', values=(filename, default_label))
         
@@ -387,8 +427,8 @@ class MiniConsolaApp:
     
     def update_available_values(self):
         """Actualizar listas de valores disponibles para reglas de capping"""
-        # Actualizar fases disponibles
-        self.available_fases = list(set(self.fase_labels.values()))
+        # Actualizar sólidos disponibles
+        self.available_solidos = list(set(self.solido_labels.values()))
         
         # Actualizar valores únicos de pas_cut si tenemos columna mapeada
         self.available_pas_cut_values = []
@@ -440,9 +480,9 @@ class MiniConsolaApp:
             except Exception as e:
                 self.log(f"❌ Error detectando valores de PAS_CUT: {str(e)}")
         
-        # Log de fases disponibles
-        if self.available_fases:
-            self.log(f"Fases configuradas: {', '.join(self.available_fases)}")
+        # Log de sólidos disponibles
+        if self.available_solidos:
+            self.log(f"Sólidos configurados: {', '.join(self.available_solidos)}")
         
         # Actualizar info en pestaña de reglas
         self.update_rules_info()
@@ -450,23 +490,23 @@ class MiniConsolaApp:
     def update_rules_info(self):
         """Actualizar información mostrada en pestaña de reglas"""
         try:
-            fases_count = len(self.available_fases)
+            solidos_count = len(self.available_solidos)
             pas_cut_count = len(self.available_pas_cut_values)
             
-            if fases_count == 0:
-                info_text = "⚠️ Configura archivos y etiquetas de fase primero"
+            if solidos_count == 0:
+                info_text = "⚠️ Configura archivos y asigna sólidos primero"
             elif pas_cut_count == 0:
-                info_text = f"✅ {fases_count} fases | ⚠️ Mapea columna PAS_CUT"
+                info_text = f"✅ {solidos_count} sólidos | ⚠️ Mapea columna PAS_CUT"
             else:
-                info_text = f"✅ {fases_count} fases | ✅ {pas_cut_count} valores PAS_CUT detectados"
+                info_text = f"✅ {solidos_count} sólidos | ✅ {pas_cut_count} valores PAS_CUT detectados"
             
             self.rules_info_label.config(text=info_text)
             
         except Exception:
             pass
     
-    def edit_fase_label(self):
-        """Editar etiqueta de fase del archivo seleccionado"""
+    def edit_solido_label(self):
+        """Editar etiqueta de sólido del archivo seleccionado"""
         selection = self.files_tree.selection()
         if not selection:
             messagebox.showwarning("Advertencia", "Selecciona un archivo primero")
@@ -475,16 +515,16 @@ class MiniConsolaApp:
         item = selection[0]
         filename, current_label = self.files_tree.item(item, 'values')
         
-        new_label = simpledialog.askstring("Editar Etiqueta de Fase", 
-                                            f"Nueva etiqueta para {filename}:", 
+        new_label = simpledialog.askstring("Editar Sólido", 
+                                            f"Nuevo sólido para {filename}:", 
                                             initialvalue=current_label)
         if new_label:
             # Encontrar el path completo
             for csv_path in self.csv_files:
                 if Path(csv_path).name == filename:
-                    self.fase_labels[csv_path] = new_label
+                    self.solido_labels[csv_path] = new_label
                     self.files_tree.item(item, values=(filename, new_label))
-                    # Actualizar valores disponibles cuando se cambia una fase
+                    # Actualizar valores disponibles cuando se cambia un sólido
                     self.update_available_values()
                     break
     
@@ -542,7 +582,7 @@ class MiniConsolaApp:
         info_frame = ttk.LabelFrame(main_container, text="Información", padding=10)
         info_frame.pack(fill='x', pady=(0, 10))
         
-        info_text = f"Fases disponibles: {len(self.available_fases)} configuradas\n"
+        info_text = f"Sólidos disponibles: {len(self.available_solidos)} configurados\n"
         info_text += f"Valores PAS_CUT: {len(self.available_pas_cut_values)} detectados"
         ttk.Label(info_frame, text=info_text, font=('Arial', 9)).pack()
         
@@ -551,17 +591,17 @@ class MiniConsolaApp:
         main_frame.pack(fill='x', pady=(0, 10))
         
         # Variables
-        fase_var = tk.StringVar(value=existing_values[0] if existing_values else "")
+        solido_var = tk.StringVar(value=existing_values[0] if existing_values else "")
         pas_cut_var = tk.StringVar(value=existing_values[1] if existing_values else "")
         rango_min_var = tk.DoubleVar(value=float(existing_values[2]) if existing_values else 0.0)
         rango_max_var = tk.DoubleVar(value=float(existing_values[3]) if existing_values else 1.0)
         multiplicador_var = tk.DoubleVar(value=float(existing_values[4]) if existing_values else 1.0)
         
         # Campos del formulario con comboboxes
-        ttk.Label(main_frame, text="Fase:").grid(row=0, column=0, sticky='w', padx=5, pady=8)
-        fase_combo = ttk.Combobox(main_frame, textvariable=fase_var, width=20, state='readonly')
-        fase_combo['values'] = self.available_fases if self.available_fases else ["⚠️ Configura archivos primero"]
-        fase_combo.grid(row=0, column=1, padx=5, pady=8, sticky='w')
+        ttk.Label(main_frame, text="Sólido:").grid(row=0, column=0, sticky='w', padx=5, pady=8)
+        solido_combo = ttk.Combobox(main_frame, textvariable=solido_var, width=20, state='readonly')
+        solido_combo['values'] = self.available_solidos if self.available_solidos else ["⚠️ Configura archivos primero"]
+        solido_combo.grid(row=0, column=1, padx=5, pady=8, sticky='w')
         
         ttk.Label(main_frame, text="Pas Cut:").grid(row=1, column=0, sticky='w', padx=5, pady=8)
         pas_cut_combo = ttk.Combobox(main_frame, textvariable=pas_cut_var, width=20, state='readonly')
@@ -584,7 +624,7 @@ class MiniConsolaApp:
         example_frame = ttk.LabelFrame(main_container, text="Ejemplo", padding=10)
         example_frame.pack(fill='x', pady=(0, 10))
         
-        example_text = "Ejemplo: Fase='10', PAS_CUT='3', Min=0.5, Max=1.0, Mult=0.9\n"
+        example_text = "Ejemplo: Sólido='10', PAS_CUT='3', Min=0.5, Max=1.0, Mult=0.9\n"
         example_text += "→ Si CUT_OP está entre 0.5 y 1.0, CUT_PLAN = CUT_OP × 0.9"
         ttk.Label(example_frame, text=example_text, font=('Arial', 8), foreground='gray').pack()
         
@@ -594,14 +634,14 @@ class MiniConsolaApp:
         
         def save_rule():
             try:
-                fase = fase_var.get()
+                solido = solido_var.get()
                 pas_cut = pas_cut_var.get()
                 rango_min = rango_min_var.get()
                 rango_max = rango_max_var.get()
                 multiplicador = multiplicador_var.get()
                 
-                if not fase:
-                    messagebox.showerror("Error", "Debe seleccionar una Fase")
+                if not solido:
+                    messagebox.showerror("Error", "Debe seleccionar un Sólido")
                     return
                 
                 if not pas_cut:
@@ -617,13 +657,13 @@ class MiniConsolaApp:
                     return
                 
                 # Agregar regla
-                self.rules_manager.add_rule(fase, pas_cut, rango_min, rango_max, multiplicador)
+                self.rules_manager.add_rule(solido, pas_cut, rango_min, rango_max, multiplicador)
                 
                 # Actualizar vista
                 self.refresh_rules_tree()
                 
                 # Mensaje de confirmación
-                self.log(f"✅ Regla agregada: Fase '{fase}', PAS_CUT '{pas_cut}', "
+                self.log(f"✅ Regla agregada: Sólido '{solido}', PAS_CUT '{pas_cut}', "
                         f"rango [{rango_min}, {rango_max}), multiplicador {multiplicador}")
                 
                 # Cerrar diálogo
@@ -660,9 +700,263 @@ class MiniConsolaApp:
         # Agregar reglas actuales
         for rule in self.rules_manager.get_all_rules():
             self.rules_tree.insert('', 'end', values=(
-                rule['fase'], rule['pas_cut'], rule['rango_min'], 
+                rule['solido'], rule['pas_cut'], rule['rango_min'], 
                 rule['rango_max'], rule['multiplicador']
             ))
+    
+    def generate_preview(self):
+        """Generar preview de antes/después para todas las combinaciones sólido/pas_cut"""
+        try:
+            # Validaciones
+            if not self.csv_files:
+                messagebox.showerror("Error", "Primero selecciona archivos CSV")
+                return
+                
+            column_mapping = self._get_current_column_mapping()
+            if not column_mapping:
+                messagebox.showerror("Error", "Primero configura el mapeo de columnas")
+                return
+            
+            # Limpiar área de preview
+            self.preview_text.config(state='normal')
+            self.preview_text.delete('1.0', tk.END)
+            self.preview_text.insert('1.0', "🔄 Generando preview...\n\n")
+            self.preview_text.update()
+            
+            # Obtener datos de muestra de cada archivo
+            preview_data = []
+            
+            for csv_path in self.csv_files:
+                try:
+                    # Leer archivo (ya sin metadata porque skipea filas 2-4)
+                    df = self.processor._read_csv_safe(csv_path, lambda x: None)
+                    
+                    if df is None or df.empty:
+                        continue
+                    
+                    # Mapear columnas para trabajo interno (ya no necesitamos limpieza adicional)
+                    df_work = df.copy()
+                    for std_name, user_col in column_mapping.items():
+                        if user_col in df.columns:
+                            df_work[std_name] = pd.to_numeric(df[user_col], errors='coerce')
+                    
+                    # Agregar sólido
+                    solido_label = self.solido_labels.get(csv_path, "unknown")
+                    df_work['solido'] = solido_label
+                    df_work['pas_cut'] = df_work['pas_cut'].astype(str)
+                    
+                    # Crear versión "antes" (sin reglas)
+                    df_work['cut_plan_antes'] = df_work['cut_op'].copy()
+                    
+                    # Crear versión "después" (con reglas)
+                    df_work['cut_plan'] = df_work['cut_op'].copy()
+                    df_work = self.processor._apply_capping_rules(df_work, self.rules_manager.get_all_rules(), lambda x: None)
+                    df_work['cut_plan_despues'] = df_work['cut_plan'].copy()
+                    
+                    # Agrupar por sólido/pas_cut para estadísticas
+                    for (solido, pas_cut), group in df_work.groupby(['solido', 'pas_cut']):
+                        preview_data.append({
+                            'archivo': Path(csv_path).name,
+                            'solido': solido,
+                            'pas_cut': pas_cut,
+                            'filas': len(group),
+                            'cut_op_stats': group['cut_op'].describe(),
+                            'antes_stats': group['cut_plan_antes'].describe(),
+                            'despues_stats': group['cut_plan_despues'].describe(),
+                            'cambios': (group['cut_plan_despues'] != group['cut_plan_antes']).sum()
+                        })
+                        
+                except Exception as e:
+                    self.log(f"Error procesando {Path(csv_path).name}: {str(e)}")
+                    continue
+            
+            # Mostrar resultados
+            self._display_preview_results(preview_data)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Error generando preview: {str(e)}")
+            self.preview_text.config(state='normal')
+            self.preview_text.delete('1.0', tk.END)
+            self.preview_text.insert('1.0', f"❌ Error: {str(e)}\n")
+            self.preview_text.config(state='disabled')
+    
+    def refresh_preview(self):
+        """Actualizar preview con datos actuales"""
+        self.generate_preview()
+    
+    def _get_metadata_rows(self, csv_path):
+        """Obtener las filas metadata (2, 3, 4) de un archivo CSV original"""
+        try:
+            # Leer las primeras 5 filas SIN HEADERS para capturar toda la metadata
+            df_full = pd.read_csv(csv_path, nrows=5, header=None)
+            
+            if len(df_full) >= 4:
+                # Ahora sí, extraer las filas 2, 3, 4 del archivo (índices 1, 2, 3)
+                # índice 0 = header, índice 1,2,3 = metadata filas 2,3,4
+                metadata_rows = df_full.iloc[1:4]  # Filas 2, 3, 4 completas
+                return metadata_rows
+            else:
+                return pd.DataFrame()
+        except Exception as e:
+            self.log(f"Error obteniendo metadata de {os.path.basename(csv_path)}: {str(e)}")
+            return pd.DataFrame()
+    
+    def _save_csv_with_metadata(self, df_data, output_path, reference_csv_path):
+        """Guardar CSV con metadata insertada entre headers y datos"""
+        try:
+            # Obtener filas metadata del archivo de referencia
+            metadata_df = self._get_metadata_rows(reference_csv_path)
+            
+            if metadata_df.empty:
+                # Si no hay metadata, guardar normalmente
+                df_data.to_csv(output_path, index=False)
+                return
+            
+            # Crear el archivo final con estructura correcta:
+            # 1. Headers (nombres de columnas)
+            # 2. Filas metadata (2, 3, 4)  
+            # 3. Datos procesados
+            
+            with open(output_path, 'w', newline='', encoding='utf-8') as f:
+                # 1. Escribir headers
+                headers = ','.join(df_data.columns)
+                f.write(headers + '\n')
+                
+                # 2. Escribir filas metadata
+                for _, row in metadata_df.iterrows():
+                    # Asegurar que tiene el mismo número de columnas que df_data
+                    metadata_values = []
+                    for i, col in enumerate(df_data.columns):
+                        if i < len(row):
+                            metadata_values.append(str(row.iloc[i]))
+                        else:
+                            metadata_values.append('')  # Rellenar con vacío si falta
+                    f.write(','.join(metadata_values) + '\n')
+                
+                # 3. Escribir datos (sin headers)
+                df_data.to_csv(f, header=False, index=False)
+                
+            self.log(f"  - CSV guardado con metadata incluida")
+                
+        except Exception as e:
+            self.log(f"Error guardando CSV con metadata: {str(e)}")
+            # Fallback: guardar sin metadata
+            df_data.to_csv(output_path, index=False)
+    
+    def _clean_vulcan_metadata(self, df, column_mapping):
+        """Limpiar filas problemáticas de exportación Vulcan"""
+        try:
+            # Verificar que las columnas mapeadas existen
+            required_cols = list(column_mapping.values())
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                return pd.DataFrame()  # Retornar DataFrame vacío si faltan columnas
+            
+            # Filtrar filas con datos válidos en las columnas principales
+            df_clean = df.copy()
+            
+            # Eliminar filas donde las columnas numéricas no son números
+            for std_name, user_col in column_mapping.items():
+                if std_name in ['cut_op', 'rst_op']:  # Columnas que deben ser numéricas
+                    # Convertir a numérico y eliminar filas con NaN
+                    df_clean[user_col] = pd.to_numeric(df_clean[user_col], errors='coerce')
+                    df_clean = df_clean.dropna(subset=[user_col])
+            
+            # Filtrar filas donde pas_cut tiene valores válidos (no vacíos, no metadata)
+            pas_cut_col = column_mapping.get('pas_cut')
+            if pas_cut_col:
+                df_clean = df_clean[df_clean[pas_cut_col].notna()]
+                df_clean = df_clean[df_clean[pas_cut_col].astype(str).str.strip() != '']
+                # Eliminar filas que parecen metadata (ej: que empiecen con #, Min=, Max=, etc.)
+                mask = ~df_clean[pas_cut_col].astype(str).str.contains(r'^(?:#|Min=|Max=|Values=|Codes=)', na=False)
+                df_clean = df_clean[mask]
+            
+            return df_clean
+            
+        except Exception as e:
+            self.log(f"Error limpiando metadata: {str(e)}")
+            return df
+    
+    def _display_preview_results(self, preview_data):
+        """Mostrar resultados del preview en el text widget"""
+        self.preview_text.config(state='normal')
+        self.preview_text.delete('1.0', tk.END)
+        
+        if not preview_data:
+            self.preview_text.insert('1.0', "❌ No se encontraron datos válidos para mostrar preview\n")
+            self.preview_text.config(state='disabled')
+            return
+        
+        # Título
+        header = "PREVIEW DE CAMBIOS POR SÓLIDO/PAS_CUT\n"
+        header += "=" * 50 + "\n\n"
+        self.preview_text.insert(tk.END, header)
+        
+        # Agrupar por sólido para mejor organización
+        from collections import defaultdict
+        data_by_solido = defaultdict(list)
+        for item in preview_data:
+            data_by_solido[item['solido']].append(item)
+        
+        for solido, items in data_by_solido.items():
+            self.preview_text.insert(tk.END, f"🔸 SÓLIDO: {solido}\n")
+            self.preview_text.insert(tk.END, "-" * 40 + "\n")
+            
+            for item in items:
+                # Información básica
+                self.preview_text.insert(tk.END, f"\n  📋 PAS_CUT: {item['pas_cut']} | Archivo: {item['archivo']}\n")
+                self.preview_text.insert(tk.END, f"  📊 Filas procesadas: {item['filas']} | Filas modificadas: {item['cambios']}\n")
+                
+                if item['cambios'] > 0:
+                    self.preview_text.insert(tk.END, f"  🎯 HAY CAMBIOS - Se aplicaron reglas de capping\n")
+                else:
+                    self.preview_text.insert(tk.END, f"  ✅ Sin cambios - No hay reglas que afecten este grupo\n")
+                
+                # Estadísticas de CUT_OP original
+                stats_orig = item['cut_op_stats']
+                self.preview_text.insert(tk.END, f"  📈 CUT_OP Original: Min={stats_orig['min']:.3f}, Max={stats_orig['max']:.3f}, Media={stats_orig['mean']:.3f}\n")
+                
+                # Comparación antes/después si hay cambios
+                if item['cambios'] > 0:
+                    antes = item['antes_stats']
+                    despues = item['despues_stats']
+                    self.preview_text.insert(tk.END, f"  📉 Antes:   Min={antes['min']:.3f}, Max={antes['max']:.3f}, Media={antes['mean']:.3f}\n")
+                    self.preview_text.insert(tk.END, f"  📈 Después: Min={despues['min']:.3f}, Max={despues['max']:.3f}, Media={despues['mean']:.3f}\n")
+                    
+                    # Calcular impacto
+                    impacto = ((despues['mean'] - antes['mean']) / antes['mean']) * 100
+                    self.preview_text.insert(tk.END, f"  🎯 Impacto: {impacto:+.1f}% en promedio\n")
+                
+                self.preview_text.insert(tk.END, "\n")
+            
+            self.preview_text.insert(tk.END, "\n")
+        
+        # Resumen general
+        total_filas = sum(item['filas'] for item in preview_data)
+        total_cambios = sum(item['cambios'] for item in preview_data)
+        combinaciones = len(preview_data)
+        
+        self.preview_text.insert(tk.END, f"📊 RESUMEN GENERAL\n")
+        self.preview_text.insert(tk.END, f"=" * 20 + "\n")
+        self.preview_text.insert(tk.END, f"Total combinaciones Sólido/PAS_CUT: {combinaciones}\n")
+        self.preview_text.insert(tk.END, f"Total filas procesadas: {total_filas:,}\n")
+        self.preview_text.insert(tk.END, f"Filas que cambiarán: {total_cambios:,} ({total_cambios/total_filas*100:.1f}%)\n")
+        
+        self.preview_text.config(state='disabled')
+        
+        # Scroll al inicio
+        self.preview_text.see('1.0')
+    
+    def _get_current_column_mapping(self):
+        """Obtener mapeo de columnas actual"""
+        if not all([self.cut_op_var.get(), self.rst_op_var.get(), self.pas_cut_var.get()]):
+            return None
+        
+        return {
+            'cut_op': self.cut_op_var.get(),
+            'rst_op': self.rst_op_var.get(),
+            'pas_cut': self.pas_cut_var.get()
+        }
     
     def process_data(self):
         """Procesar los datos con las configuraciones actuales"""
@@ -692,14 +986,17 @@ class MiniConsolaApp:
                 # Opción 3: Consolidar todo (comportamiento original)
                 result_df = self.processor.process_block_models(
                     csv_files=self.csv_files,
-                    fase_labels=self.fase_labels,
+                    solido_labels=self.solido_labels,
                     column_mapping=column_mapping,
                     capping_rules=self.rules_manager.get_all_rules(),
                     log_callback=self.log
                 )
                 
                 output_path = os.path.join(os.path.dirname(self.csv_files[0]), "blockmodel_capeado.csv")
-                result_df.to_csv(output_path, index=False)
+                
+                # Usar el primer archivo como referencia para obtener metadata
+                reference_csv = self.csv_files[0]
+                self._save_csv_with_metadata(result_df, output_path, reference_csv)
                 
                 self.log(f"✅ Archivo consolidado guardado: {output_path}")
                 self.log(f"📊 Total de filas procesadas: {len(result_df)}")
@@ -721,7 +1018,7 @@ class MiniConsolaApp:
                         # Procesar solo este archivo
                         file_df = self.processor.process_individual_file(
                             csv_path=csv_path,
-                            fase_label=self.fase_labels.get(csv_path, "unknown"),
+                            solido_label=self.solido_labels.get(csv_path, "unknown"),
                             column_mapping=column_mapping,
                             capping_rules=self.rules_manager.get_all_rules(),
                             log_callback=self.log
@@ -740,8 +1037,8 @@ class MiniConsolaApp:
                             # Sobrescribir original (PELIGROSO)
                             output_path = csv_path
                         
-                        # Guardar archivo
-                        file_df.to_csv(output_path, index=False)
+                        # Guardar archivo con metadata incluida
+                        self._save_csv_with_metadata(file_df, output_path, csv_path)
                         processed_files.append(output_path)
                         total_rows += len(file_df)
                         
@@ -791,14 +1088,14 @@ class MiniConsolaApp:
 
 Total de filas procesadas: {len(df):,}
 
-Distribución por fase:
-{df['fase'].value_counts().to_string()}
+Distribución por sólido:
+{df['SOLIDO'].value_counts().to_string()}
 
 Estadísticas de CUT_PLAN:
-{df['cut_plan'].describe().to_string()}
+{df['CUT_PLAN'].describe().to_string()}
 
 Estadísticas de CUS_PLAN:
-{df['cus_plan'].describe().to_string()}
+{df['CUS_PLAN'].describe().to_string()}
 
 Columnas en el resultado final:
 {', '.join(df.columns)}
@@ -837,10 +1134,10 @@ DETALLE POR ARCHIVO:
         for file_path in processed_files:
             try:
                 file_name = Path(file_path).name
-                # Leer solo las columnas que nos interesan para estadísticas rápidas
-                df_stats = pd.read_csv(file_path, usecols=['FASE', 'CUT_PLAN', 'CUS_PLAN'])
+                # Leer saltando las filas metadata (2, 3, 4) igual que en el procesamiento
+                df_stats = pd.read_csv(file_path, usecols=['SOLIDO', 'CUT_PLAN', 'CUS_PLAN'], skiprows=[1,2,3])
                 
-                fase = df_stats['FASE'].iloc[0] if not df_stats['FASE'].empty else 'N/A'
+                solido = df_stats['SOLIDO'].iloc[0] if not df_stats['SOLIDO'].empty else 'N/A'
                 filas = len(df_stats)
                 cut_plan_min = df_stats['CUT_PLAN'].min()
                 cut_plan_max = df_stats['CUT_PLAN'].max()
@@ -849,7 +1146,7 @@ DETALLE POR ARCHIVO:
                 
                 summary += f"""
 📄 {file_name}
-   Fase: {fase}
+   Sólido: {solido}
    Filas: {filas:,}
    CUT_PLAN: min={cut_plan_min:.4f}, max={cut_plan_max:.4f}, promedio={cut_plan_mean:.4f}
    CUS_PLAN: promedio={cus_plan_mean:.4f}
@@ -871,7 +1168,7 @@ ESTADÍSTICAS GLOBALES:
 
 COLUMNAS AGREGADAS A CADA ARCHIVO:
 ==================================
-✅ FASE - Etiqueta de fase configurada
+✅ SOLIDO - Etiqueta de sólido configurada
 ✅ CUT_PLAN - CUT_OP con reglas de capping aplicadas  
 ✅ CUS_PLAN - Calculado con fórmula: {self.processor.cus_plan_formula}
 

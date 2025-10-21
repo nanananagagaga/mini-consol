@@ -18,13 +18,13 @@ class BlockModelProcessor:
         # Fórmula configurable para CUS_PLAN - CAMBIAR AQUÍ SI ES NECESARIO
         self.cus_plan_formula = "rst_op * cut_plan"  # Fórmula base
         
-    def process_block_models(self, csv_files, fase_labels, column_mapping, capping_rules, log_callback=None):
+    def process_block_models(self, csv_files, solido_labels, column_mapping, capping_rules, log_callback=None):
         """
         Procesar múltiples archivos CSV de block models
         
         Args:
             csv_files: Lista de rutas de archivos CSV
-            fase_labels: Diccionario {archivo: etiqueta_fase}
+            solido_labels: Diccionario {archivo: etiqueta_solido}
             column_mapping: Diccionario {cut_op: col_name, rst_op: col_name, pas_cut: col_name}
             capping_rules: Lista de reglas de capping
             log_callback: Función para logging (opcional)
@@ -53,12 +53,12 @@ class BlockModelProcessor:
                 # Mapear columnas a nombres estándar
                 df_mapped = self._map_columns(df, column_mapping, log)
                 
-                # Agregar columna de fase
-                fase_label = fase_labels.get(csv_path, f"fase_{i}")
-                df_mapped['fase'] = fase_label
+                # Agregar columna de sólido
+                solido_label = solido_labels.get(csv_path, f"solido_{i}")
+                df_mapped['solido'] = solido_label
                 
                 log(f"  - Filas leídas: {len(df_mapped)}")
-                log(f"  - Fase asignada: {fase_label}")
+                log(f"  - Sólido asignado: {solido_label}")
                 
                 consolidated_dfs.append(df_mapped)
                 
@@ -82,35 +82,51 @@ class BlockModelProcessor:
         log("Calculando CUS_PLAN...")
         consolidated_df = self._calculate_cus_plan(consolidated_df, log)
         
-        # Reordenar columnas para el resultado final
-        final_columns = self._get_final_column_order(consolidated_df)
-        consolidated_df = consolidated_df[final_columns]
+        # Crear DataFrame final con datos LIMPIOS (sin metadata) + columnas calculadas
+        log("Creando resultado final...")
+        
+        # Los consolidated_dfs ya contienen solo datos válidos (sin metadata)
+        # Obtener datos originales limpios de cada archivo
+        all_clean_data = []
+        
+        for i, csv_path in enumerate(csv_files):
+            # Leer archivo (ya limpio porque _read_csv_safe salta filas 2-4)
+            df_clean = self._read_csv_safe(csv_path, log)
+            if df_clean is None or df_clean.empty:
+                continue
+                
+            # Mapear columnas a nombres estándar
+            df_mapped = self._map_columns(df_clean, column_mapping, log)
+            if not df_mapped.empty:
+                all_clean_data.append(df_mapped)
+        
+        # Concatenar datos originales limpios
+        if all_clean_data:
+            result_df = pd.concat(all_clean_data, ignore_index=True)
+            
+            # Agregar las 3 columnas calculadas al final
+            result_df['SOLIDO'] = consolidated_df['solido']
+            result_df['CUT_PLAN'] = consolidated_df['cut_plan'] 
+            result_df['CUS_PLAN'] = consolidated_df['cus_plan']
+        else:
+            raise Exception("No se pudieron limpiar los datos originales")
         
         log("Procesamiento completado exitosamente")
-        return consolidated_df
+        return result_df
     
     def _read_csv_safe(self, csv_path, log_callback):
         """
-        Leer CSV de forma segura, manejando filas problemáticas
+        Leer CSV de forma segura, saltando SIEMPRE las filas 2, 3, 4 que contienen metadata Vulcan
+        Estructura esperada:
+        - Fila 1: Headers (columnas)
+        - Filas 2-4: Metadata Vulcan (#VULCAN_EXPORT, #UNITS:, #RANGES:) 
+        - Fila 5+: Datos reales
         """
         try:
-            # Intentar leer normalmente primero
-            df = pd.read_csv(csv_path)
-            
-            # Si tiene pocas filas, no hacer skip
-            if len(df) <= 5:
-                return df
-            
-            # Si tiene muchas filas, intentar skip de filas problemáticas (2, 3, 4)
-            df_skip = pd.read_csv(csv_path, skiprows=[1, 2, 3])  # skiprows es 0-indexed
-            
-            # Usar el que tenga más filas válidas
-            if len(df_skip) > len(df) * 0.8:  # Si el skip mantiene al menos 80% de los datos
-                log_callback(f"  - Aplicado skip de filas problemáticas")
-                return df_skip
-            else:
-                log_callback(f"  - Lectura normal (sin skip)")
-                return df
+            # Saltar SIEMPRE las filas 2, 3, 4 (skiprows es 0-indexed, así que [1,2,3])
+            df = pd.read_csv(csv_path, skiprows=[1, 2, 3])
+            log_callback(f"  - CSV leído saltando filas metadata (2-4)")
+            return df
                 
         except Exception as e:
             log_callback(f"  - Error leyendo CSV: {str(e)}")
@@ -118,20 +134,20 @@ class BlockModelProcessor:
     
     def _map_columns(self, df, column_mapping, log_callback):
         """
-        Mapear columnas del usuario a nombres estándar
+        Mapear columnas del usuario a nombres estándar MANTENIENDO las originales
         """
         # Crear copia del DataFrame
         df_mapped = df.copy()
         
-        # Renombrar columnas según el mapeo
-        rename_dict = {}
+        # Crear columnas estándar como COPIAS de las originales (no renombrar)
+        mapped_cols = []
         for std_name, user_col in column_mapping.items():
             if user_col in df.columns:
-                rename_dict[user_col] = std_name
+                # Crear nueva columna estándar copiando la original
+                df_mapped[std_name] = df_mapped[user_col].copy()
+                mapped_cols.append(f"{user_col} -> {std_name}")
             else:
                 raise Exception(f"Columna '{user_col}' no encontrada en el archivo")
-        
-        df_mapped = df_mapped.rename(columns=rename_dict)
         
         # Verificar que las columnas críticas existen
         required_cols = ['cut_op', 'rst_op', 'pas_cut']
@@ -139,14 +155,15 @@ class BlockModelProcessor:
         if missing_cols:
             raise Exception(f"Columnas faltantes después del mapeo: {missing_cols}")
         
-        # Convertir a numérico las columnas críticas
+        # Convertir a numérico las columnas críticas (copias estándar)
         for col in ['cut_op', 'rst_op']:
             df_mapped[col] = pd.to_numeric(df_mapped[col], errors='coerce')
         
-        # pas_cut puede ser categórico, convertir a string
+        # pas_cut puede ser categórico, convertir a string (copia estándar)
         df_mapped['pas_cut'] = df_mapped['pas_cut'].astype(str)
         
-        log_callback(f"  - Columnas mapeadas: {list(rename_dict.keys())} -> {list(rename_dict.values())}")
+        log_callback(f"  - Columnas mapeadas: {', '.join(mapped_cols)}")
+        log_callback(f"  - Columnas originales preservadas en resultado final")
         
         return df_mapped
     
@@ -160,7 +177,7 @@ class BlockModelProcessor:
         rules_applied = 0
         
         for rule in capping_rules:
-            fase = rule['fase']
+            solido = rule['solido']
             pas_cut = str(rule['pas_cut'])
             rango_min = rule['rango_min']
             rango_max = rule['rango_max']
@@ -168,7 +185,7 @@ class BlockModelProcessor:
             
             # Crear máscara para aplicar la regla
             mask = (
-                (df['fase'] == fase) & 
+                (df['solido'] == solido) & 
                 (df['pas_cut'] == pas_cut) &
                 (df['cut_op'] >= rango_min) & 
                 (df['cut_op'] < rango_max)
@@ -179,7 +196,7 @@ class BlockModelProcessor:
             if affected_rows > 0:
                 df.loc[mask, 'cut_plan'] = df.loc[mask, 'cut_op'] * multiplicador
                 rules_applied += 1
-                log_callback(f"  - Regla aplicada: fase={fase}, pas_cut={pas_cut}, "
+                log_callback(f"  - Regla aplicada: solido={solido}, pas_cut={pas_cut}, "
                            f"rango=[{rango_min}, {rango_max}), mult={multiplicador}, "
                            f"filas afectadas={affected_rows}")
         
@@ -223,28 +240,13 @@ class BlockModelProcessor:
             
         return df
     
-    def _get_final_column_order(self, df):
-        """
-        Definir orden de columnas para el resultado final
-        """
-        # Columnas principales que siempre deben aparecer primero
-        priority_columns = ['fase', 'pas_cut', 'cut_op', 'cut_plan', 'rst_op', 'cus_plan']
-        
-        # Filtrar columnas que realmente existen
-        existing_priority = [col for col in priority_columns if col in df.columns]
-        
-        # Agregar resto de columnas
-        other_columns = [col for col in df.columns if col not in priority_columns]
-        
-        return existing_priority + other_columns
-    
-    def process_individual_file(self, csv_path, fase_label, column_mapping, capping_rules, log_callback=None):
+    def process_individual_file(self, csv_path, solido_label, column_mapping, capping_rules, log_callback=None):
         """
         Procesar un solo archivo CSV agregando las columnas calculadas
         
         Args:
             csv_path: Ruta del archivo CSV
-            fase_label: Etiqueta de fase para este archivo
+            solido_label: Etiqueta de sólido para este archivo
             column_mapping: Diccionario {cut_op: col_name, rst_op: col_name, pas_cut: col_name}
             capping_rules: Lista de reglas de capping
             log_callback: Función para logging (opcional)
@@ -277,8 +279,8 @@ class BlockModelProcessor:
             # Convertir pas_cut a string para el trabajo interno
             df_work['pas_cut'] = df_work['pas_cut'].astype(str)
             
-            # Agregar columna de fase
-            df_work['fase'] = fase_label
+            # Agregar columna de sólido
+            df_work['solido'] = solido_label
             
             log(f"Filas leídas: {len(df_work)}")
             
@@ -289,11 +291,11 @@ class BlockModelProcessor:
             df_work = self._calculate_cus_plan(df_work, log)
             
             # Agregar solo las nuevas columnas al DataFrame original
-            df['FASE'] = df_work['fase']
+            df['SOLIDO'] = df_work['solido']
             df['CUT_PLAN'] = df_work['cut_plan']
             df['CUS_PLAN'] = df_work['cus_plan']
             
-            log(f"Nuevas columnas agregadas: FASE, CUT_PLAN, CUS_PLAN")
+            log(f"Nuevas columnas agregadas: SOLIDO, CUT_PLAN, CUS_PLAN")
             
             return df
             

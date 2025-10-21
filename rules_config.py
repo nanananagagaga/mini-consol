@@ -4,7 +4,7 @@ Gestor de reglas de capping
 
 Este módulo maneja las reglas de capping de forma flexible y configurable.
 Las reglas se definen por:
-- Fase (etiqueta asignada al archivo)
+- Sólido (etiqueta asignada al archivo)
 - Pas_cut (valor de la columna pas_cut)
 - Rango de valores (min, max) para cut_op
 - Multiplicador a aplicar
@@ -29,12 +29,12 @@ class RulesManager:
         # Iniciar vacío - sin ejemplos
         self.rules = []
     
-    def add_rule(self, fase, pas_cut, rango_min, rango_max, multiplicador):
+    def add_rule(self, solido, pas_cut, rango_min, rango_max, multiplicador):
         """
         Agregar nueva regla de capping
         
         Args:
-            fase (str): Etiqueta de fase
+            solido (str): Etiqueta de sólido
             pas_cut (str): Valor de pas_cut
             rango_min (float): Valor mínimo del rango (inclusive)
             rango_max (float): Valor máximo del rango (exclusive)
@@ -48,14 +48,14 @@ class RulesManager:
             raise ValueError("multiplicador debe ser positivo")
         
         new_rule = {
-            'fase': str(fase),
+            'solido': str(solido),
             'pas_cut': str(pas_cut),
             'rango_min': float(rango_min),
             'rango_max': float(rango_max),
             'multiplicador': float(multiplicador)
         }
         
-        # Verificar si ya existe una regla similar (mismo fase, pas_cut, y rango solapado)
+        # Verificar si ya existe una regla similar (mismo sólido, pas_cut, y rango solapado)
         existing_rule = self._find_overlapping_rule(new_rule)
         if existing_rule:
             # Preguntar al usuario o reemplazar automáticamente
@@ -69,7 +69,7 @@ class RulesManager:
         Buscar regla existente que tenga solapamiento de rango
         """
         for rule in self.rules:
-            if (rule['fase'] == new_rule['fase'] and 
+            if (rule['solido'] == new_rule['solido'] and 
                 rule['pas_cut'] == new_rule['pas_cut']):
                 
                 # Verificar solapamiento de rangos
@@ -86,13 +86,13 @@ class RulesManager:
         
         return None
     
-    def remove_rule(self, fase, pas_cut, rango_min, rango_max):
+    def remove_rule(self, solido, pas_cut, rango_min, rango_max):
         """
         Eliminar regla específica
         """
         rule_to_remove = None
         for rule in self.rules:
-            if (rule['fase'] == str(fase) and 
+            if (rule['solido'] == str(solido) and 
                 rule['pas_cut'] == str(pas_cut) and
                 rule['rango_min'] == float(rango_min) and
                 rule['rango_max'] == float(rango_max)):
@@ -119,12 +119,12 @@ class RulesManager:
         """
         self.rules = []
     
-    def get_rules_for_fase_pascut(self, fase, pas_cut):
+    def get_rules_for_solido_pascut(self, solido, pas_cut):
         """
-        Obtener reglas específicas para una combinación fase/pas_cut
+        Obtener reglas específicas para una combinación sólido/pas_cut
         
         Args:
-            fase (str): Etiqueta de fase
+            solido (str): Etiqueta de sólido
             pas_cut (str): Valor de pas_cut
             
         Returns:
@@ -133,7 +133,7 @@ class RulesManager:
         applicable_rules = []
         
         for rule in self.rules:
-            if rule['fase'] == str(fase) and rule['pas_cut'] == str(pas_cut):
+            if rule['solido'] == str(solido) and rule['pas_cut'] == str(pas_cut):
                 applicable_rules.append(rule)
         
         # Ordenar por rango_min para aplicación secuencial
@@ -150,16 +150,16 @@ class RulesManager:
         """
         errors = []
         
-        # Agrupar reglas por fase/pas_cut
+        # Agrupar reglas por sólido/pas_cut
         grouped_rules = {}
         for rule in self.rules:
-            key = (rule['fase'], rule['pas_cut'])
+            key = (rule['solido'], rule['pas_cut'])
             if key not in grouped_rules:
                 grouped_rules[key] = []
             grouped_rules[key].append(rule)
         
         # Verificar solapamientos dentro de cada grupo
-        for (fase, pas_cut), group_rules in grouped_rules.items():
+        for (solido, pas_cut), group_rules in grouped_rules.items():
             # Ordenar por rango_min
             group_rules.sort(key=lambda x: x['rango_min'])
             
@@ -169,7 +169,7 @@ class RulesManager:
                 
                 # Verificar solapamiento
                 if current_rule['rango_max'] > next_rule['rango_min']:
-                    error_msg = (f"Solapamiento detectado en fase='{fase}', pas_cut='{pas_cut}': "
+                    error_msg = (f"Solapamiento detectado en solido='{solido}', pas_cut='{pas_cut}': "
                                f"rango [{current_rule['rango_min']}, {current_rule['rango_max']}) "
                                f"solapa con [{next_rule['rango_min']}, {next_rule['rango_max']})")
                     errors.append(error_msg)
@@ -208,20 +208,20 @@ class RulesManager:
             dict: Diccionario con estadísticas
         """
         if not self.rules:
-            return {'total_rules': 0, 'fases': [], 'pas_cuts': []}
+            return {'total_rules': 0, 'solidos': [], 'pas_cuts': []}
         
-        fases = list(set(rule['fase'] for rule in self.rules))
+        solidos = list(set(rule['solido'] for rule in self.rules))
         pas_cuts = list(set(rule['pas_cut'] for rule in self.rules))
         
-        # Contar reglas por fase
-        rules_por_fase = {}
-        for fase in fases:
-            count = sum(1 for rule in self.rules if rule['fase'] == fase)
-            rules_por_fase[fase] = count
+        # Contar reglas por sólido
+        rules_por_solido = {}
+        for solido in solidos:
+            count = sum(1 for rule in self.rules if rule['solido'] == solido)
+            rules_por_solido[solido] = count
         
         return {
             'total_rules': len(self.rules),
-            'fases': fases,
+            'solidos': solidos,
             'pas_cuts': pas_cuts,
-            'rules_por_fase': rules_por_fase
+            'rules_por_solido': rules_por_solido
         }

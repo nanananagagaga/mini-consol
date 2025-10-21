@@ -755,6 +755,29 @@ class MiniConsolaApp:
                     
                     # Agrupar por sólido/pas_cut para estadísticas
                     for (solido, pas_cut), group in df_work.groupby(['solido', 'pas_cut']):
+                        # Buscar reglas que realmente se aplican a los datos de este grupo
+                        all_rules = self.rules_manager.get_rules_for_solido_pascut(solido, pas_cut)
+                        actually_applied_rules = []
+                        
+                        # Verificar qué reglas realmente afectan a los valores de CUT_OP en este grupo
+                        cut_op_values = group['cut_op']
+                        min_cut_op = cut_op_values.min()
+                        max_cut_op = cut_op_values.max()
+                        
+                        for rule in all_rules:
+                            # Una regla se aplica si hay solapamiento entre el rango de la regla
+                            # y el rango de valores CUT_OP en este grupo
+                            rule_min = rule['rango_min']
+                            rule_max = rule['rango_max']
+                            
+                            # DEBUG: Mostrar cálculo de solapamiento
+                            has_overlap = max_cut_op > rule_min and min_cut_op < rule_max
+                            # print(f"DEBUG: {solido}/{pas_cut} - Datos[{min_cut_op:.1f}, {max_cut_op:.1f}] vs Regla[{rule_min:.1f}, {rule_max:.1f}) = {has_overlap}")
+                            
+                            # Hay solapamiento si: max_datos > rule_min Y min_datos < rule_max
+                            if has_overlap:
+                                actually_applied_rules.append(rule)
+                        
                         preview_data.append({
                             'archivo': Path(csv_path).name,
                             'solido': solido,
@@ -763,15 +786,35 @@ class MiniConsolaApp:
                             'cut_op_stats': group['cut_op'].describe(),
                             'antes_stats': group['cut_plan_antes'].describe(),
                             'despues_stats': group['cut_plan_despues'].describe(),
-                            'cambios': (group['cut_plan_despues'] != group['cut_plan_antes']).sum()
+                            'cambios': (group['cut_plan_despues'] != group['cut_plan_antes']).sum(),
+                            'reglas_aplicables': actually_applied_rules,
+                            'reglas_definidas': all_rules  # Todas las reglas para esta combinación
                         })
                         
                 except Exception as e:
                     self.log(f"Error procesando {Path(csv_path).name}: {str(e)}")
                     continue
             
+            # Buscar reglas no utilizadas
+            all_dataframes = []
+            for csv_path in self.csv_files:
+                try:
+                    column_mapping = self._get_current_column_mapping()
+                    df = self.processor._read_csv_safe(csv_path, lambda x: None)
+                    df_work = self.processor._map_columns(df, column_mapping, lambda x: None)
+                    
+                    if not df_work.empty:
+                        solido_label = self.solido_labels.get(csv_path, "unknown")
+                        df_work['solido'] = solido_label
+                        df_work['pas_cut'] = df_work['pas_cut'].astype(str)
+                        all_dataframes.append(df_work)
+                except:
+                    continue
+            
+            unused_rules = self.rules_manager.get_unused_rules(all_dataframes)
+            
             # Mostrar resultados
-            self._display_preview_results(preview_data)
+            self._display_preview_results(preview_data, unused_rules)
             
         except Exception as e:
             messagebox.showerror("Error", f"Error generando preview: {str(e)}")
@@ -877,7 +920,7 @@ class MiniConsolaApp:
             self.log(f"Error limpiando metadata: {str(e)}")
             return df
     
-    def _display_preview_results(self, preview_data):
+    def _display_preview_results(self, preview_data, unused_rules=None):
         """Mostrar resultados del preview en el text widget"""
         self.preview_text.config(state='normal')
         self.preview_text.delete('1.0', tk.END)
@@ -912,6 +955,27 @@ class MiniConsolaApp:
                 else:
                     self.preview_text.insert(tk.END, f"  ✅ Sin cambios - No hay reglas que afecten este grupo\n")
                 
+                # Información sobre reglas aplicables y definidas
+                reglas_aplicables = item.get('reglas_aplicables', [])
+                reglas_definidas = item.get('reglas_definidas', [])
+                
+                if reglas_aplicables:
+                    self.preview_text.insert(tk.END, f"  🎯 REGLAS QUE SE APLICAN ({len(reglas_aplicables)} reglas):\n")
+                    for i, regla in enumerate(reglas_aplicables, 1):
+                        mult_info = f"x{regla['multiplicador']:.3f}" if regla['multiplicador'] != 1.0 else "sin cambio"
+                        self.preview_text.insert(tk.END, f"    [{i}] Rango [{regla['rango_min']:.3f}, {regla['rango_max']:.3f}): {mult_info}\n")
+                
+                # Mostrar reglas definidas que NO se aplican
+                reglas_no_aplicadas = [r for r in reglas_definidas if r not in reglas_aplicables]
+                if reglas_no_aplicadas:
+                    self.preview_text.insert(tk.END, f"  ℹ️  REGLAS DEFINIDAS PERO NO APLICADAS ({len(reglas_no_aplicadas)} reglas):\n")
+                    for i, regla in enumerate(reglas_no_aplicadas, 1):
+                        mult_info = f"x{regla['multiplicador']:.3f}" if regla['multiplicador'] != 1.0 else "sin cambio"
+                        self.preview_text.insert(tk.END, f"    [{i}] Rango [{regla['rango_min']:.3f}, {regla['rango_max']:.3f}): {mult_info} (fuera del rango de datos)\n")
+                
+                if not reglas_definidas:
+                    self.preview_text.insert(tk.END, f"  ❌ Sin reglas definidas para esta combinación\n")
+                
                 # Estadísticas de CUT_OP original
                 stats_orig = item['cut_op_stats']
                 self.preview_text.insert(tk.END, f"  📈 CUT_OP Original: Min={stats_orig['min']:.3f}, Max={stats_orig['max']:.3f}, Media={stats_orig['mean']:.3f}\n")
@@ -940,7 +1004,26 @@ class MiniConsolaApp:
         self.preview_text.insert(tk.END, f"=" * 20 + "\n")
         self.preview_text.insert(tk.END, f"Total combinaciones Sólido/PAS_CUT: {combinaciones}\n")
         self.preview_text.insert(tk.END, f"Total filas procesadas: {total_filas:,}\n")
-        self.preview_text.insert(tk.END, f"Filas que cambiarán: {total_cambios:,} ({total_cambios/total_filas*100:.1f}%)\n")
+        self.preview_text.insert(tk.END, f"Filas que cambiarán: {total_cambios:,} ({total_cambios/total_filas*100:.1f}%)\n\n")
+        
+        # Mostrar reglas no utilizadas
+        if unused_rules is not None:
+            if unused_rules:
+                self.preview_text.insert(tk.END, f"⚠️  REGLAS NO UTILIZADAS ({len(unused_rules)} reglas)\n")
+                self.preview_text.insert(tk.END, f"=" * 40 + "\n")
+                self.preview_text.insert(tk.END, f"Las siguientes reglas no se aplican a ninguna combinación en los datos:\n\n")
+                
+                for i, regla in enumerate(unused_rules, 1):
+                    mult_info = f"x{regla['multiplicador']:.3f}" if regla['multiplicador'] != 1.0 else "sin cambio"
+                    self.preview_text.insert(tk.END, f"  [{i}] Sólido: '{regla['solido']}' | PAS_CUT: '{regla['pas_cut']}'\n")
+                    self.preview_text.insert(tk.END, f"      Rango: [{regla['rango_min']:.3f}, {regla['rango_max']:.3f}): {mult_info}\n\n")
+                
+                self.preview_text.insert(tk.END, f"💡 Sugerencia: Revisa si estas reglas tienen errores de tipeo o\n")
+                self.preview_text.insert(tk.END, f"   si los datos no contienen las combinaciones esperadas.\n")
+            else:
+                self.preview_text.insert(tk.END, f"✅ TODAS LAS REGLAS SE UTILIZAN\n")
+                self.preview_text.insert(tk.END, f"=" * 30 + "\n")
+                self.preview_text.insert(tk.END, f"Todas las reglas definidas se aplican a alguna combinación en los datos.\n")
         
         self.preview_text.config(state='disabled')
         
@@ -1074,31 +1157,112 @@ class MiniConsolaApp:
     def show_processing_summary(self, df):
         """Mostrar resumen del procesamiento consolidado"""
         summary_window = tk.Toplevel(self.root)
-        summary_window.title("Resumen de Procesamiento - Archivo Consolidado")
-        summary_window.geometry("600x400")
+        summary_window.title("Estadísticas Detalladas - Archivo Consolidado")
+        summary_window.geometry("900x700")
         summary_window.transient(self.root)
         
-        text_widget = tk.Text(summary_window, wrap='word', font=('Consolas', 10))
+        text_widget = tk.Text(summary_window, wrap='word', font=('Consolas', 9))
         scrollbar = ttk.Scrollbar(summary_window, orient='vertical', command=text_widget.yview)
         text_widget.configure(yscrollcommand=scrollbar.set)
         
-        # Generar resumen
-        summary = f"""RESUMEN DE PROCESAMIENTO CONSOLIDADO
-===================================
+        # Identificar las columnas originales para CUT_OP, RST_OP, CUS_OP
+        column_mapping = self._get_current_column_mapping()
+        cut_op_col = column_mapping.get('cut_op', 'CUT_OP') if column_mapping else 'CUT_OP'
+        rst_op_col = column_mapping.get('rst_op', 'RST_OP') if column_mapping else 'RST_OP'
+        
+        # Para CUS_OP, buscar una columna que pueda ser CUS_OP o similar
+        cus_op_col = None
+        for col in df.columns:
+            if 'cus' in col.lower() and 'op' in col.lower() and col != 'CUS_PLAN':
+                cus_op_col = col
+                break
+        
+        # Generar resumen detallado
+        summary = f"""ESTADÍSTICAS DETALLADAS - PROCESAMIENTO CONSOLIDADO
+==================================================
 
+📊 INFORMACIÓN GENERAL:
 Total de filas procesadas: {len(df):,}
-
 Distribución por sólido:
 {df['SOLIDO'].value_counts().to_string()}
 
-Estadísticas de CUT_PLAN:
+📈 ESTADÍSTICAS GLOBALES:
+========================
+
+🔸 SÓLIDO:
+{df['SOLIDO'].value_counts().describe()}
+
+🔸 CUT_PLAN:
 {df['CUT_PLAN'].describe().to_string()}
 
-Estadísticas de CUS_PLAN:
-{df['CUS_PLAN'].describe().to_string()}
+🔸 CUT_OP ({cut_op_col}):
+{df[cut_op_col].describe().to_string()}
 
-Columnas en el resultado final:
+🔸 RST_PLAN:
+{df['RST_PLAN'].describe().to_string()}
+
+🔸 RST_OP ({rst_op_col}):
+{df[rst_op_col].describe().to_string()}
+
+🔸 CUS_PLAN:
+{df['CUS_PLAN'].describe().to_string()}
+"""
+
+        # Agregar CUS_OP si existe
+        if cus_op_col and cus_op_col in df.columns:
+            summary += f"""
+🔸 CUS_OP ({cus_op_col}):
+{df[cus_op_col].describe().to_string()}
+"""
+        else:
+            summary += f"""
+🔸 CUS_OP: (No disponible en datos originales)
+"""
+
+        # Estadísticas por sólido
+        summary += f"""
+
+📊 ESTADÍSTICAS POR SÓLIDO:
+===========================
+"""
+
+        for solido in sorted(df['SOLIDO'].unique()):
+            df_solido = df[df['SOLIDO'] == solido]
+            summary += f"""
+🔹 SÓLIDO: {solido} ({len(df_solido):,} filas)
+-------------------------------------------
+
+  CUT_PLAN: min={df_solido['CUT_PLAN'].min():.4f}, max={df_solido['CUT_PLAN'].max():.4f}, 
+            media={df_solido['CUT_PLAN'].mean():.4f}, std={df_solido['CUT_PLAN'].std():.4f}
+  
+  CUT_OP:   min={df_solido[cut_op_col].min():.4f}, max={df_solido[cut_op_col].max():.4f}, 
+            media={df_solido[cut_op_col].mean():.4f}, std={df_solido[cut_op_col].std():.4f}
+  
+  RST_PLAN: min={df_solido['RST_PLAN'].min():.4f}, max={df_solido['RST_PLAN'].max():.4f}, 
+            media={df_solido['RST_PLAN'].mean():.4f}, std={df_solido['RST_PLAN'].std():.4f}
+  
+  RST_OP:   min={df_solido[rst_op_col].min():.4f}, max={df_solido[rst_op_col].max():.4f}, 
+            media={df_solido[rst_op_col].mean():.4f}, std={df_solido[rst_op_col].std():.4f}
+  
+  CUS_PLAN: min={df_solido['CUS_PLAN'].min():.4f}, max={df_solido['CUS_PLAN'].max():.4f}, 
+            media={df_solido['CUS_PLAN'].mean():.4f}, std={df_solido['CUS_PLAN'].std():.4f}
+"""
+            
+            # Agregar CUS_OP por sólido si existe
+            if cus_op_col and cus_op_col in df.columns:
+                summary += f"""  
+  CUS_OP:   min={df_solido[cus_op_col].min():.4f}, max={df_solido[cus_op_col].max():.4f}, 
+            media={df_solido[cus_op_col].mean():.4f}, std={df_solido[cus_op_col].std():.4f}
+"""
+
+        summary += f"""
+
+📋 INFORMACIÓN ADICIONAL:
+========================
+Columnas en el resultado final: {len(df.columns)} columnas
 {', '.join(df.columns)}
+
+Fórmula CUS_PLAN utilizada: {self.processor.cus_plan_formula}
 """
         
         text_widget.insert('1.0', summary)
@@ -1111,69 +1275,226 @@ Columnas en el resultado final:
         """Mostrar resumen del procesamiento de archivos individuales"""
         summary_window = tk.Toplevel(self.root)
         mode_text = "Actualización de Originales" if save_mode == "update_original" else "Archivos Duplicados"
-        summary_window.title(f"Resumen de Procesamiento - {mode_text}")
-        summary_window.geometry("700x500")
+        summary_window.title(f"Estadísticas Detalladas - {mode_text}")
+        summary_window.geometry("900x700")
         summary_window.transient(self.root)
         
-        text_widget = tk.Text(summary_window, wrap='word', font=('Consolas', 10))
+        text_widget = tk.Text(summary_window, wrap='word', font=('Consolas', 9))
         scrollbar = ttk.Scrollbar(summary_window, orient='vertical', command=text_widget.yview)
         text_widget.configure(yscrollcommand=scrollbar.set)
         
+        # Identificar las columnas originales
+        column_mapping = self._get_current_column_mapping()
+        cut_op_col = column_mapping.get('cut_op', 'CUT_OP') if column_mapping else 'CUT_OP'
+        rst_op_col = column_mapping.get('rst_op', 'RST_OP') if column_mapping else 'RST_OP'
+        
         # Generar resumen detallado
-        summary = f"""RESUMEN DE PROCESAMIENTO POR ARCHIVOS
-====================================
+        summary = f"""ESTADÍSTICAS DETALLADAS - PROCESAMIENTO POR ARCHIVOS
+===================================================
 
+📊 INFORMACIÓN GENERAL:
 Modo de guardado: {mode_text}
 Archivos procesados: {len(processed_files)}
 Total de filas procesadas: {total_rows:,}
+Promedio filas por archivo: {total_rows / len(processed_files):.0f}
 
-DETALLE POR ARCHIVO:
+📋 DETALLE POR ARCHIVO:
+======================
 """
         
-        # Analizar cada archivo procesado para obtener estadísticas
+        # Recopilar todos los datos para estadísticas globales
+        all_data = []
+        file_details = []
+        
+        # Analizar cada archivo procesado para obtener estadísticas detalladas
         for file_path in processed_files:
             try:
                 file_name = Path(file_path).name
-                # Leer saltando las filas metadata (2, 3, 4) igual que en el procesamiento
-                df_stats = pd.read_csv(file_path, usecols=['SOLIDO', 'CUT_PLAN', 'CUS_PLAN'], skiprows=[1,2,3])
                 
-                solido = df_stats['SOLIDO'].iloc[0] if not df_stats['SOLIDO'].empty else 'N/A'
-                filas = len(df_stats)
-                cut_plan_min = df_stats['CUT_PLAN'].min()
-                cut_plan_max = df_stats['CUT_PLAN'].max()
-                cut_plan_mean = df_stats['CUT_PLAN'].mean()
-                cus_plan_mean = df_stats['CUS_PLAN'].mean()
-                
-                summary += f"""
+                # Leer todas las columnas necesarias
+                try:
+                    # Intentar leer con las columnas originales también
+                    df_file = pd.read_csv(file_path, skiprows=[1,2,3])
+                    
+                    # Verificar que existan las columnas necesarias
+                    required_cols = ['SOLIDO', 'CUT_PLAN', 'RST_PLAN', 'CUS_PLAN']
+                    missing_cols = [col for col in required_cols if col not in df_file.columns]
+                    
+                    if missing_cols:
+                        raise Exception(f"Columnas faltantes: {missing_cols}")
+                    
+                    # Identificar columnas CUS_OP si existe
+                    cus_op_col = None
+                    for col in df_file.columns:
+                        if 'cus' in col.lower() and 'op' in col.lower() and col != 'CUS_PLAN':
+                            cus_op_col = col
+                            break
+                    
+                    solido = df_file['SOLIDO'].iloc[0] if not df_file['SOLIDO'].empty else 'N/A'
+                    filas = len(df_file)
+                    
+                    # Estadísticas detalladas del archivo
+                    file_stats = {
+                        'filename': file_name,
+                        'solido': solido,
+                        'filas': filas,
+                        'cut_plan': df_file['CUT_PLAN'].describe(),
+                        'cut_op': df_file[cut_op_col].describe() if cut_op_col in df_file.columns else None,
+                        'rst_plan': df_file['RST_PLAN'].describe(),
+                        'rst_op': df_file[rst_op_col].describe() if rst_op_col in df_file.columns else None,
+                        'cus_plan': df_file['CUS_PLAN'].describe(),
+                        'cus_op': df_file[cus_op_col].describe() if cus_op_col and cus_op_col in df_file.columns else None
+                    }
+                    
+                    file_details.append(file_stats)
+                    all_data.append(df_file)
+                    
+                    # Agregar detalle del archivo al resumen
+                    summary += f"""
 📄 {file_name}
-   Sólido: {solido}
-   Filas: {filas:,}
-   CUT_PLAN: min={cut_plan_min:.4f}, max={cut_plan_max:.4f}, promedio={cut_plan_mean:.4f}
-   CUS_PLAN: promedio={cus_plan_mean:.4f}
+   Sólido: {solido} | Filas: {filas:,}
+   
+   CUT_PLAN: min={file_stats['cut_plan']['min']:.4f}, max={file_stats['cut_plan']['max']:.4f}, 
+             media={file_stats['cut_plan']['mean']:.4f}, std={file_stats['cut_plan']['std']:.4f}
+   
+   RST_PLAN: min={file_stats['rst_plan']['min']:.4f}, max={file_stats['rst_plan']['max']:.4f}, 
+             media={file_stats['rst_plan']['mean']:.4f}, std={file_stats['rst_plan']['std']:.4f}
+   
+   CUS_PLAN: min={file_stats['cus_plan']['min']:.4f}, max={file_stats['cus_plan']['max']:.4f}, 
+             media={file_stats['cus_plan']['mean']:.4f}, std={file_stats['cus_plan']['std']:.4f}
 """
-                
+                    
+                    if file_stats['cut_op'] is not None:
+                        summary += f"""   
+   CUT_OP:   min={file_stats['cut_op']['min']:.4f}, max={file_stats['cut_op']['max']:.4f}, 
+             media={file_stats['cut_op']['mean']:.4f}, std={file_stats['cut_op']['std']:.4f}
+"""
+                    
+                    if file_stats['rst_op'] is not None:
+                        summary += f"""   
+   RST_OP:   min={file_stats['rst_op']['min']:.4f}, max={file_stats['rst_op']['max']:.4f}, 
+             media={file_stats['rst_op']['mean']:.4f}, std={file_stats['rst_op']['std']:.4f}
+"""
+                    
+                    if file_stats['cus_op'] is not None:
+                        summary += f"""   
+   CUS_OP:   min={file_stats['cus_op']['min']:.4f}, max={file_stats['cus_op']['max']:.4f}, 
+             media={file_stats['cus_op']['mean']:.4f}, std={file_stats['cus_op']['std']:.4f}
+"""
+                    
+                except Exception as read_error:
+                    summary += f"""
+❌ {file_name}
+   Error leyendo estadísticas: {str(read_error)[:80]}
+"""
+                    continue
+                    
             except Exception as e:
                 summary += f"""
 ❌ {Path(file_path).name}
-   Error leyendo estadísticas: {str(e)[:60]}
+   Error procesando archivo: {str(e)[:60]}
 """
+                continue
         
-        # Agregar información adicional
+        # Estadísticas globales combinando todos los archivos
+        if all_data:
+            combined_df = pd.concat(all_data, ignore_index=True)
+            
+            summary += f"""
+
+📈 ESTADÍSTICAS GLOBALES COMBINADAS:
+===================================
+
+🔸 SÓLIDOS:
+{combined_df['SOLIDO'].value_counts().to_string()}
+
+🔸 CUT_PLAN (Global):
+{combined_df['CUT_PLAN'].describe().to_string()}
+
+🔸 RST_PLAN (Global):
+{combined_df['RST_PLAN'].describe().to_string()}
+
+🔸 CUS_PLAN (Global):
+{combined_df['CUS_PLAN'].describe().to_string()}
+"""
+            
+            if cut_op_col in combined_df.columns:
+                summary += f"""
+🔸 CUT_OP ({cut_op_col} - Global):
+{combined_df[cut_op_col].describe().to_string()}
+"""
+            
+            if rst_op_col in combined_df.columns:
+                summary += f"""
+🔸 RST_OP ({rst_op_col} - Global):
+{combined_df[rst_op_col].describe().to_string()}
+"""
+            
+            # Buscar CUS_OP
+            cus_op_col = None
+            for col in combined_df.columns:
+                if 'cus' in col.lower() and 'op' in col.lower() and col != 'CUS_PLAN':
+                    cus_op_col = col
+                    break
+            
+            if cus_op_col:
+                summary += f"""
+🔸 CUS_OP ({cus_op_col} - Global):
+{combined_df[cus_op_col].describe().to_string()}
+"""
+            
+            # Estadísticas por sólido
+            summary += f"""
+
+📊 ESTADÍSTICAS POR SÓLIDO:
+===========================
+"""
+            
+            for solido in sorted(combined_df['SOLIDO'].unique()):
+                df_solido = combined_df[combined_df['SOLIDO'] == solido]
+                summary += f"""
+🔹 SÓLIDO: {solido} ({len(df_solido):,} filas)
+-------------------------------------------
+
+  CUT_PLAN: min={df_solido['CUT_PLAN'].min():.4f}, max={df_solido['CUT_PLAN'].max():.4f}, 
+            media={df_solido['CUT_PLAN'].mean():.4f}, std={df_solido['CUT_PLAN'].std():.4f}
+  
+  RST_PLAN: min={df_solido['RST_PLAN'].min():.4f}, max={df_solido['RST_PLAN'].max():.4f}, 
+            media={df_solido['RST_PLAN'].mean():.4f}, std={df_solido['RST_PLAN'].std():.4f}
+  
+  CUS_PLAN: min={df_solido['CUS_PLAN'].min():.4f}, max={df_solido['CUS_PLAN'].max():.4f}, 
+            media={df_solido['CUS_PLAN'].mean():.4f}, std={df_solido['CUS_PLAN'].std():.4f}
+"""
+                
+                if cut_op_col in df_solido.columns:
+                    summary += f"""  
+  CUT_OP:   min={df_solido[cut_op_col].min():.4f}, max={df_solido[cut_op_col].max():.4f}, 
+            media={df_solido[cut_op_col].mean():.4f}, std={df_solido[cut_op_col].std():.4f}
+"""
+                
+                if rst_op_col in df_solido.columns:
+                    summary += f"""  
+  RST_OP:   min={df_solido[rst_op_col].min():.4f}, max={df_solido[rst_op_col].max():.4f}, 
+            media={df_solido[rst_op_col].mean():.4f}, std={df_solido[rst_op_col].std():.4f}
+"""
+                
+                if cus_op_col and cus_op_col in df_solido.columns:
+                    summary += f"""  
+  CUS_OP:   min={df_solido[cus_op_col].min():.4f}, max={df_solido[cus_op_col].max():.4f}, 
+            media={df_solido[cus_op_col].mean():.4f}, std={df_solido[cus_op_col].std():.4f}
+"""
+
         summary += f"""
 
-ESTADÍSTICAS GLOBALES:
-======================
-- Promedio de filas por archivo: {total_rows / len(processed_files):.0f}
-- Archivos exitosos: {len(processed_files)}
-
+📋 INFORMACIÓN ADICIONAL:
+========================
 COLUMNAS AGREGADAS A CADA ARCHIVO:
-==================================
 ✅ SOLIDO - Etiqueta de sólido configurada
-✅ CUT_PLAN - CUT_OP con reglas de capping aplicadas  
+✅ CUT_PLAN - CUT_OP con reglas de capping aplicadas
+✅ RST_PLAN - RST_OP original (sin modificaciones)
 ✅ CUS_PLAN - Calculado con fórmula: {self.processor.cus_plan_formula}
 
 UBICACIÓN DE ARCHIVOS:
-=====================
 {Path(processed_files[0]).parent if processed_files else 'N/A'}
 """
         

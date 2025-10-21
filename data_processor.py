@@ -104,9 +104,10 @@ class BlockModelProcessor:
         if all_clean_data:
             result_df = pd.concat(all_clean_data, ignore_index=True)
             
-            # Agregar las 3 columnas calculadas al final
+            # Agregar las 4 columnas calculadas al final
             result_df['SOLIDO'] = consolidated_df['solido']
-            result_df['CUT_PLAN'] = consolidated_df['cut_plan'] 
+            result_df['CUT_PLAN'] = consolidated_df['cut_plan']
+            result_df['RST_PLAN'] = consolidated_df['rst_op']  # RST_PLAN = RST_OP original
             result_df['CUS_PLAN'] = consolidated_df['cus_plan']
         else:
             raise Exception("No se pudieron limpiar los datos originales")
@@ -293,9 +294,10 @@ class BlockModelProcessor:
             # Agregar solo las nuevas columnas al DataFrame original
             df['SOLIDO'] = df_work['solido']
             df['CUT_PLAN'] = df_work['cut_plan']
+            df['RST_PLAN'] = df_work['rst_op']  # RST_PLAN = RST_OP original
             df['CUS_PLAN'] = df_work['cus_plan']
             
-            log(f"Nuevas columnas agregadas: SOLIDO, CUT_PLAN, CUS_PLAN")
+            log(f"Nuevas columnas agregadas: SOLIDO, CUT_PLAN, RST_PLAN, CUS_PLAN")
             
             return df
             

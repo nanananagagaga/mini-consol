@@ -200,6 +200,62 @@ class RulesManager:
         else:
             raise ValueError("Formato de reglas inválido")
     
+    def get_unused_rules(self, dataframes):
+        """
+        Obtener reglas que no se aplican realmente a los datos
+        
+        Args:
+            dataframes (list): Lista de DataFrames con datos procesados
+            
+        Returns:
+            list: Lista de reglas no utilizadas (sin solapamiento con los datos)
+        """
+        if not self.rules:
+            return []
+        
+        # Obtener todas las combinaciones únicas de sólido/pas_cut con sus rangos CUT_OP
+        data_combinations = {}  # {(solido, pas_cut): (min_cut_op, max_cut_op)}
+        
+        for df in dataframes:
+            if df is not None and not df.empty and 'cut_op' in df.columns:
+                for (solido, pas_cut), group in df.groupby(['solido', 'pas_cut']):
+                    cut_op_values = group['cut_op'].dropna()
+                    if not cut_op_values.empty:
+                        min_cut_op = cut_op_values.min()
+                        max_cut_op = cut_op_values.max()
+                        key = (str(solido), str(pas_cut))
+                        
+                        # Si ya existe esta combinación, expandir el rango
+                        if key in data_combinations:
+                            existing_min, existing_max = data_combinations[key]
+                            min_cut_op = min(min_cut_op, existing_min)
+                            max_cut_op = max(max_cut_op, existing_max)
+                        
+                        data_combinations[key] = (min_cut_op, max_cut_op)
+        
+        # Encontrar reglas que no tienen solapamiento con los datos
+        unused_rules = []
+        for rule in self.rules:
+            rule_combination = (rule['solido'], rule['pas_cut'])
+            
+            if rule_combination not in data_combinations:
+                # La combinación sólido/pas_cut no existe en los datos
+                unused_rules.append(rule)
+            else:
+                # La combinación existe, verificar si hay solapamiento de rangos
+                data_min, data_max = data_combinations[rule_combination]
+                rule_min = rule['rango_min']
+                rule_max = rule['rango_max']
+                
+                # Hay solapamiento si: data_max > rule_min Y data_min < rule_max
+                has_overlap = data_max > rule_min and data_min < rule_max
+                
+                if not has_overlap:
+                    # No hay solapamiento, la regla no se usa
+                    unused_rules.append(rule)
+        
+        return unused_rules
+    
     def get_summary_stats(self):
         """
         Obtener estadísticas resumen de las reglas
